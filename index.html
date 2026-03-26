@@ -101,9 +101,38 @@
     <div class="bg-white rounded-xl shadow-card p-6 mb-6">
       <h2 class="text-2xl font-bold mb-4">欢迎使用AI模型调用平台</h2>
       <p class="text-gray-600 mb-2">本平台支持在同一页面内调用 DeepSeek、Google Banana、豆包 Seedream、Meshy 与腾讯混元3D 五种 AI 模型，您可以配置 API 地址和密钥，发送请求并查看响应结果。</p>
-      <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
-        本页面发起的是真实网络请求（非模拟响应）。请注意：浏览器直连第三方 API 可能受到 CORS 限制，且密钥会暴露在前端环境，生产环境建议通过后端代理转发。
-      </p>
+      <div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+        <p class="font-medium mb-1">本页面发起的是真实网络请求（非模拟响应）。</p>
+        <ul class="list-disc list-inside space-y-1">
+          <li>浏览器直连第三方 API 可能受到 CORS 限制，导致请求被拦截。</li>
+          <li>API 密钥会暴露在前端运行环境中，不适合生产场景。</li>
+          <li>建议在生产环境使用后端代理：由服务端注入密钥并转发请求，前端仅调用代理地址。</li>
+        </ul>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4">
+        <h3 class="text-sm font-semibold text-slate-800 mb-2 flex items-center">
+          <i class="fa fa-shield mr-2 text-primary"></i>网络请求设置（推荐）
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+            <input type="radio" name="network-mode" value="direct" class="network-mode-radio" checked>
+            直连第三方 API（仅开发调试）
+          </label>
+          <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer md:col-span-2">
+            <input type="radio" name="network-mode" value="backend" class="network-mode-radio">
+            通过后端代理（生产推荐）
+          </label>
+          <div class="md:col-span-3">
+            <label class="block text-sm font-medium text-gray-700 mb-1">后端代理前缀（示例：/api/proxy 或 https://your-server.com/proxy）</label>
+            <input type="text" id="proxy-base-url" class="w-full px-3 py-2 border border-gray-300 rounded-md input-focus" placeholder="留空表示不启用代理">
+          </div>
+        </div>
+        <div class="flex justify-end mt-3">
+          <button id="save-network-settings" class="px-4 py-2 bg-primary text-white rounded-md btn-hover">
+            <i class="fa fa-save mr-1"></i> 保存网络设置
+          </button>
+        </div>
+      </div>
       <div class="flex flex-wrap gap-4">
         <div class="flex items-center space-x-2 bg-blue-50 px-4 py-2 rounded-lg">
           <div class="w-3 h-3 rounded-full bg-deepseek"></div>
@@ -922,9 +951,11 @@
       }
     };
     
-    // CORS代理配置（可选）
-    const CORS_PROXY = 'https://cors-anywhere.herokuapp.com/';
-    const USE_CORS_PROXY = false; // 设置为true如果需要使用CORS代理
+    // 网络请求设置（默认直连，生产环境建议后端代理）
+    const networkSettings = {
+      mode: 'direct', // direct | backend
+      proxyBaseUrl: ''
+    };
     
     // 请求超时设置（毫秒）
     const REQUEST_TIMEOUT = 30000; // 30秒
@@ -993,6 +1024,9 @@
       document.getElementById('save-hunyuan3d-config').addEventListener('click', function() {
         saveConfig('hunyuan3d');
       });
+
+      // 保存网络设置
+      document.getElementById('save-network-settings').addEventListener('click', saveNetworkSettings);
       
       // 发送请求按钮
       document.getElementById('send-deepseek-request').addEventListener('click', function() {
@@ -1085,6 +1119,11 @@
           const img = e.target.closest('.image-container').querySelector('img');
           showImagePreview(img.src);
         }
+      });
+
+      // 切换网络模式时更新提示
+      document.querySelectorAll('.network-mode-radio').forEach(radio => {
+        radio.addEventListener('change', updateNetworkModeTip);
       });
     }
     
@@ -1201,6 +1240,29 @@
       
       // 显示保存成功提示
       showNotification('配置保存成功', 'success');
+    }
+
+    // 保存网络设置
+    function saveNetworkSettings() {
+      const selectedMode = document.querySelector('input[name="network-mode"]:checked')?.value || 'direct';
+      const proxyBaseUrl = document.getElementById('proxy-base-url').value.trim();
+
+      networkSettings.mode = selectedMode;
+      networkSettings.proxyBaseUrl = proxyBaseUrl.replace(/\/$/, '');
+
+      localStorage.setItem('network_settings', JSON.stringify(networkSettings));
+      updateNetworkModeTip();
+      showNotification('网络设置保存成功', 'success');
+    }
+
+    // 根据网络模式更新状态提示
+    function updateNetworkModeTip() {
+      const selectedMode = document.querySelector('input[name="network-mode"]:checked')?.value || 'direct';
+      if (selectedMode === 'backend') {
+        updateStatusMessage('当前网络模式：后端代理（推荐生产环境）');
+      } else {
+        updateStatusMessage('当前网络模式：浏览器直连（可能受 CORS 限制）');
+      }
     }
 
     // 获取对象路径值（如 data[0].url）
@@ -1347,11 +1409,27 @@
       throw new Error('Meshy 任务轮询超时（10分钟），请稍后在历史记录中重试');
     }
 
+    // 生成最终请求地址
+    function buildRequestUrl(url) {
+      if (networkSettings.mode !== 'backend') return url;
+      if (!networkSettings.proxyBaseUrl) {
+        throw new Error('当前已选择后端代理模式，请先配置“后端代理前缀”');
+      }
+
+      // 支持模板写法：/api/proxy?target={url}
+      if (networkSettings.proxyBaseUrl.includes('{url}')) {
+        return networkSettings.proxyBaseUrl.replace('{url}', encodeURIComponent(url));
+      }
+
+      // 默认拼接原始URL，适用于后端按路径解析的场景
+      return `${networkSettings.proxyBaseUrl}${url}`;
+    }
+
     // 带超时与可选代理的 fetch
     async function requestWithTimeout(url, options = {}) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-      const finalUrl = USE_CORS_PROXY ? `${CORS_PROXY}${url}` : url;
+      const finalUrl = buildRequestUrl(url);
 
       try {
         return await fetch(finalUrl, {
@@ -2117,6 +2195,18 @@
     
     // 加载配置
     function loadConfigs() {
+      // 加载网络设置
+      const savedNetworkSettings = localStorage.getItem('network_settings');
+      if (savedNetworkSettings) {
+        const parsed = JSON.parse(savedNetworkSettings);
+        networkSettings.mode = parsed.mode === 'backend' ? 'backend' : 'direct';
+        networkSettings.proxyBaseUrl = (parsed.proxyBaseUrl || '').trim().replace(/\/$/, '');
+      }
+      const modeRadio = document.querySelector(`input[name="network-mode"][value="${networkSettings.mode}"]`);
+      if (modeRadio) modeRadio.checked = true;
+      document.getElementById('proxy-base-url').value = networkSettings.proxyBaseUrl;
+      updateNetworkModeTip();
+
       // 加载DeepSeek配置
       const deepseekConfig = localStorage.getItem('config_deepseek');
       if (deepseekConfig) {
